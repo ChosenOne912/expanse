@@ -6,11 +6,20 @@ Requires=docker.service
 After=network-online.target docker.service
 
 [Service]
-Type=exec
+Type=simple
+User=austin
+Group=austin
 WorkingDirectory=/home/austin/Documents/github/expanse/
-ExecStartPre=-/home/austin/Documents/github/expanse/run.sh prod update
-ExecStart=/home/austin/Documents/github/expanse/run.sh prod up --no-d
-ExecStop=/home/austin/Documents/github/expanse/run.sh prod down
+Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+ExecStart=/bin/bash /home/austin/Documents/github/expanse/run.sh prod up --watch
+ExecStop=/bin/bash /home/austin/Documents/github/expanse/run.sh prod down
+Restart=always
+RestartSec=10
+KillMode=mixed
+KillSignal=SIGTERM
+TimeoutStopSec=30
+StandardOutput=journal
+StandardError=journal
 
 [Install]
 WantedBy=default.target
