@@ -6,7 +6,7 @@ import express from "express";
 import http from "http";
 import cookie_session from "cookie-session";
 import passport from "passport";
-import passport_reddit from "passport-reddit";
+import * as passport_reddit from "passport-reddit";
 import crypto from "crypto";
 import filesystem from "fs";
 import fileupload from "express-fileupload";
@@ -40,10 +40,15 @@ app.use(fileupload({
 
 app.use("/", express.static(`${process.env.frontend}/build/`));
 
-passport.use(new passport_reddit.Strategy({
+const RedditStrategy = passport_reddit.Strategy || passport_reddit.default?.Strategy || passport_reddit.default;
+
+passport.use(new RedditStrategy({
 	clientID: process.env.REDDIT_APP_ID,
 	clientSecret: process.env.REDDIT_APP_SECRET,
 	callbackURL: process.env.REDDIT_APP_REDIRECT,
+	authorizationURL: 'https://www.reddit.com/api/v1/authorize',
+	tokenURL: 'https://www.reddit.com/api/v1/access_token',
+	profileURL: 'https://oauth.reddit.com/api/v1/me',
 	scope: ["identity", "history", "read", "save", "edit", "vote", "report"] // https://github.com/reddit-archive/reddit/wiki/OAuth2 "scope values", https://www.reddit.com/dev/api/oauth
 }, async (user_access_token, user_refresh_token, user_profile, done) => { // http://www.passportjs.org/docs/configure "verify callback"
 	const u = new user.User(user_profile.name, user_refresh_token);
@@ -53,6 +58,7 @@ passport.use(new passport_reddit.Strategy({
 		return done(null, u); // passes the user to serializeUser
 	} catch (err) {
 		console.error(err);
+		return done(err, null);
 	}
 }));
 passport.serializeUser((u, done) => done(null, u.username)); // store user's username into session cookie
@@ -72,8 +78,10 @@ process.nextTick(() => { // handle any deserializeUser errors here
 		if (err) {
 			console.error(err);
 
-			const username = req.session.passport.user;
-			delete user.usernames_to_socket_ids[username];
+			const username = req.session?.passport?.user;
+			if (username) {
+				delete user.usernames_to_socket_ids[username];
+			}
 			
 			req.session = null; // destroy login session
 			console.log(`destroyed session (${username})`);
@@ -107,33 +115,32 @@ app.use(passport.session());
 
 app.get("/login", (req, res, next) => {
 	passport.authenticate("reddit", { // https://github.com/Slotos/passport-reddit/blob/9717523d3d3f58447fee765c0ad864592efb67e8/examples/login/app.js#L86
-		state: req.session.state = crypto.randomBytes(32).toString("hex"),
 		duration: "permanent"
 	})(req, res, next);
 });
 
 app.get("/callback", (req, res, next) => {
-	if (req.query.state == req.session.state) {
-		passport.authenticate("reddit", async (err, u, info) => {
-			if (err || !u) {
+	passport.authenticate("reddit", async (err, u, info) => {
+		if (err || !u) {
+			res.redirect(302, "/logout");
+		} else if ((allowed_users.has("*") && denied_users.has(u.username)) || (!allowed_users.has("*") && !allowed_users.has(u.username)) || (denied_users.has("*") && !allowed_users.has(u.username))) {
+			try {
+				await u.purge();
 				res.redirect(302, "/logout");
-			} else if ((allowed_users.has("*") && denied_users.has(u.username)) || (!allowed_users.has("*") && !allowed_users.has(u.username)) || (denied_users.has("*") && !allowed_users.has(u.username))) {
-				try {
-					await u.purge();
-					res.redirect(302, "/logout");
-					console.log(`denied user (${u.username})`);
-				} catch (err) {
-					console.error(err);
-				}
-			} else {
-				req.login(u, () => {
-					res.redirect(302, "/");
-				});
+				console.log(`denied user (${u.username})`);
+			} catch (err) {
+				console.error(err);
 			}
-		})(req, res, next);
-	} else {
-		res.redirect(302, "/logout");
-	}
+		} else {
+			req.login(u, (loginErr) => {
+				if (loginErr) {
+					res.redirect(302, "/logout");
+				} else {
+					res.redirect(302, "/");
+				}
+			});
+		}
+	})(req, res, next);
 });
 
 app.get("/authentication_check", (req, res) => {
